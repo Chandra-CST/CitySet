@@ -1,4 +1,4 @@
-# GrievanceFlow
+# CitySet
 
 A citizen grievance management system built with React and Vite. Citizens submit complaints, which are automatically categorized and prioritized, tracked by ID, and managed through an admin dashboard.
 
