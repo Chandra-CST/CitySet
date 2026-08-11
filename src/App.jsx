@@ -318,7 +318,7 @@ function App() {
   return (
     <div>
       <header>
-        <h1>GrievanceFlow</h1>
+        <h1>CitySet</h1>
         <p>Citizen Grievance Management System</p>
 
         <div>
