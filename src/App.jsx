@@ -1,10 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import classifyGrievance from "./utils/classifier";
 
-// NOTE: this is a client-side-only gate for demo purposes.
-// It is NOT real authentication - anyone reading the source can
-// find this code. For production this must be replaced with a
-// real backend + JWT-based role auth (see README roadmap).
+const API_URL = "http://localhost:8080/api/grievances";
 const ADMIN_PASSCODE = "admin123";
 
 function App() {
@@ -17,12 +14,9 @@ function App() {
     location: "",
   });
 
+  const [grievances, setGrievances] = useState([]);
   const [error, setError] = useState("");
-
-  const [grievances, setGrievances] = useState(() => {
-    const savedGrievances = localStorage.getItem("grievances");
-    return savedGrievances ? JSON.parse(savedGrievances) : [];
-  });
+  const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -33,6 +27,33 @@ function App() {
   const [trackedGrievance, setTrackedGrievance] = useState(null);
   const [trackingMessage, setTrackingMessage] = useState("");
 
+  useEffect(() => {
+    fetchGrievances();
+  }, []);
+
+  async function fetchGrievances() {
+    try {
+      setLoading(true);
+      setError("");
+
+      const response = await fetch(API_URL);
+
+      if (!response.ok) {
+        throw new Error("Failed to load grievances.");
+      }
+
+      const data = await response.json();
+      setGrievances(data);
+    } catch (error) {
+      console.error(error);
+      setError(
+        "Could not connect to the backend. Make sure Spring Boot is running."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function handleChange(event) {
     setGrievance({
       ...grievance,
@@ -42,7 +63,7 @@ function App() {
     setError("");
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
 
     const name = grievance.name.trim();
@@ -60,17 +81,15 @@ function App() {
     }
 
     if (description.length < 10) {
-      setError(
-        "Please describe the grievance in at least 10 characters."
-      );
+      setError("Please describe the grievance in at least 10 characters.");
       return;
     }
 
     const duplicate = grievances.some(
       (item) =>
-        item.name.toLowerCase() === name.toLowerCase() &&
-        item.location.toLowerCase() === location.toLowerCase() &&
-        item.description.toLowerCase() === description.toLowerCase()
+        item.name?.toLowerCase() === name.toLowerCase() &&
+        item.location?.toLowerCase() === location.toLowerCase() &&
+        item.description?.toLowerCase() === description.toLowerCase()
     );
 
     if (duplicate) {
@@ -78,86 +97,124 @@ function App() {
       return;
     }
 
-    const classification = classifyGrievance(description);
+    try {
+      const classification = classifyGrievance(description);
 
-    const newGrievance = {
-      id: `GF-${Date.now()}`,
-      name,
-      description,
-      location,
-      ...classification,
-      status: "Pending",
-      createdAt: new Date().toISOString(),
-    };
+      const newGrievance = {
+        name,
+        description,
+        location,
+        category: classification.category,
+        department: classification.department,
+        priority: classification.priority,
+        status: "Pending",
+      };
 
-    const updatedGrievances = [...grievances, newGrievance];
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(newGrievance),
+      });
 
-    setGrievances(updatedGrievances);
+      if (!response.ok) {
+        throw new Error("Failed to submit grievance.");
+      }
 
-    localStorage.setItem(
-      "grievances",
-      JSON.stringify(updatedGrievances)
-    );
+      const savedGrievance = await response.json();
 
-    setGrievance({
-      name: "",
-      description: "",
-      location: "",
-    });
+      setGrievances((previous) => [...previous, savedGrievance]);
 
-    setError("");
-  }
+      setGrievance({
+        name: "",
+        description: "",
+        location: "",
+      });
 
-  function updateStatus(id, newStatus) {
-    const updatedGrievances = grievances.map((item) =>
-      item.id === id
-        ? {
-            ...item,
-            status: newStatus,
-            updatedAt: new Date().toISOString(),
-          }
-        : item
-    );
+      setError("");
+      setTrackedGrievance(savedGrievance);
+      setTrackingId(String(savedGrievance.id));
+      setTrackingMessage("");
 
-    setGrievances(updatedGrievances);
-
-    localStorage.setItem(
-      "grievances",
-      JSON.stringify(updatedGrievances)
-    );
-
-    if (trackedGrievance?.id === id) {
-      setTrackedGrievance(
-        updatedGrievances.find((item) => item.id === id)
+      alert(
+        `Grievance submitted successfully!\nYour Grievance ID is ${savedGrievance.id}`
+      );
+    } catch (error) {
+      console.error(error);
+      setError(
+        "Could not submit grievance. Make sure the backend is running."
       );
     }
   }
 
-  function deleteGrievance(id) {
+  async function updateStatus(id, newStatus) {
+    try {
+      const response = await fetch(
+        `${API_URL}/${id}/status?status=${encodeURIComponent(newStatus)}`,
+        {
+          method: "PUT",
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to update status.");
+      }
+
+      const updatedGrievance = await response.json();
+
+      setGrievances((previous) =>
+        previous.map((item) =>
+          item.id === updatedGrievance.id ? updatedGrievance : item
+        )
+      );
+
+      if (trackedGrievance?.id === id) {
+        setTrackedGrievance(updatedGrievance);
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Could not update grievance status.");
+    }
+  }
+
+  async function deleteGrievance(id) {
     const confirmed = window.confirm(
       "Are you sure you want to delete this grievance?"
     );
 
-    if (!confirmed) return;
+    if (!confirmed) {
+      return;
+    }
 
-    const updatedGrievances = grievances.filter(
-      (item) => item.id !== id
-    );
+    try {
+      const response = await fetch(`${API_URL}/${id}`, {
+        method: "DELETE",
+      });
 
-    setGrievances(updatedGrievances);
+      if (!response.ok) {
+        throw new Error("Failed to delete grievance.");
+      }
 
-    localStorage.setItem(
-      "grievances",
-      JSON.stringify(updatedGrievances)
-    );
+      setGrievances((previous) =>
+        previous.filter((item) => item.id !== id)
+      );
+
+      if (trackedGrievance?.id === id) {
+        setTrackedGrievance(null);
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Could not delete grievance.");
+    }
   }
 
   function trackGrievance(event) {
     event.preventDefault();
 
-    const id = trackingId.trim().toUpperCase();
+    const id = trackingId.trim();
 
-    const result = grievances.find((item) => item.id === id);
+    const result = grievances.find((item) => String(item.id) === id);
 
     if (result) {
       setTrackedGrievance(result);
@@ -169,19 +226,30 @@ function App() {
   }
 
   function formatDate(date) {
-    if (!date) return "Not available";
+    if (!date) {
+      return "Not available";
+    }
 
     return new Date(date).toLocaleString();
   }
 
   function getStatusClass(status) {
-    if (status === "Resolved") return "badge resolved";
-    if (status === "In Progress") return "badge progress";
+    if (status === "Resolved") {
+      return "badge resolved";
+    }
+
+    if (status === "In Progress") {
+      return "badge progress";
+    }
+
     return "badge pending";
   }
 
   function getPriorityClass(priority) {
-    if (priority === "High") return "badge high";
+    if (priority === "High") {
+      return "badge high";
+    }
+
     return "badge medium";
   }
 
@@ -193,8 +261,9 @@ function App() {
 
     const enteredCode = window.prompt("Enter admin passcode:");
 
-    // User cancelled the prompt - do nothing.
-    if (enteredCode === null) return;
+    if (enteredCode === null) {
+      return;
+    }
 
     if (enteredCode === ADMIN_PASSCODE) {
       setAdminUnlocked(true);
@@ -213,7 +282,6 @@ function App() {
       "Department",
       "Priority",
       "Status",
-      "Submitted",
     ];
 
     const rows = grievances.map((item) => [
@@ -224,7 +292,6 @@ function App() {
       item.department,
       item.priority,
       item.status,
-      formatDate(item.createdAt),
     ]);
 
     const csvContent = [headers, ...rows]
@@ -235,12 +302,15 @@ function App() {
       )
       .join("\n");
 
-    const blob = new Blob([csvContent], { type: "text/csv" });
+    const blob = new Blob([csvContent], {
+      type: "text/csv",
+    });
+
     const url = URL.createObjectURL(blob);
 
     const link = document.createElement("a");
     link.href = url;
-    link.download = `grievances-${Date.now()}.csv`;
+    link.download = `cityset-grievances-${Date.now()}.csv`;
     link.click();
 
     URL.revokeObjectURL(url);
@@ -268,20 +338,18 @@ function App() {
     const searchText = search.toLowerCase();
 
     const matchesSearch =
-      item.description.toLowerCase().includes(searchText) ||
-      item.name.toLowerCase().includes(searchText) ||
-      item.location.toLowerCase().includes(searchText);
+      item.description?.toLowerCase().includes(searchText) ||
+      item.name?.toLowerCase().includes(searchText) ||
+      item.location?.toLowerCase().includes(searchText);
 
     const matchesStatus =
       statusFilter === "All" || item.status === statusFilter;
 
     const matchesPriority =
-      priorityFilter === "All" ||
-      item.priority === priorityFilter;
+      priorityFilter === "All" || item.priority === priorityFilter;
 
     const matchesCategory =
-      categoryFilter === "All" ||
-      item.category === categoryFilter;
+      categoryFilter === "All" || item.category === categoryFilter;
 
     return (
       matchesSearch &&
@@ -297,9 +365,11 @@ function App() {
   }, {});
 
   const locationCounts = grievances.reduce((counts, item) => {
-    const location = item.location.trim();
+    const location = item.location?.trim();
 
-    counts[location] = (counts[location] || 0) + 1;
+    if (location) {
+      counts[location] = (counts[location] || 0) + 1;
+    }
 
     return counts;
   }, {});
@@ -308,386 +378,613 @@ function App() {
     (a, b) => b[1] - a[1]
   );
 
-  // Status breakdown, reused for the bar-chart visualization below.
   const statusBreakdown = [
-    { label: "Pending", count: pending, className: "pending" },
-    { label: "In Progress", count: inProgress, className: "progress" },
-    { label: "Resolved", count: resolved, className: "resolved" },
+    {
+      label: "Pending",
+      count: pending,
+      className: "pending",
+    },
+    {
+      label: "In Progress",
+      count: inProgress,
+      className: "progress",
+    },
+    {
+      label: "Resolved",
+      count: resolved,
+      className: "resolved",
+    },
   ];
 
-  return (
-    <div>
-      <header>
-        <h1>CitySet</h1>
-        <p>Citizen Grievance Management System</p>
+  if (loading) {
+    return (
+      <div className="loading-screen">
+        <div className="loading-card">
+          <div className="loading-icon">🏙️</div>
+          <h2>Loading CitySet</h2>
+          <p>Connecting to the civic services...</p>
+        </div>
+      </div>
+    );
+  }
 
-        <div>
-          <button onClick={() => setRole("citizen")}>
-            Citizen
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <div className="brand-icon">🏙️</div>
+
+          <div>
+            <h1>CitySet</h1>
+            <p>Citizen Grievance Management</p>
+          </div>
+        </div>
+
+        <nav className="nav-actions">
+          <button
+            className={role === "citizen" ? "nav-button active" : "nav-button"}
+            onClick={() => setRole("citizen")}
+          >
+            👤 Citizen
           </button>
 
-          <button onClick={handleAdminClick}>Admin</button>
-        </div>
+          <button
+            className={role === "admin" ? "nav-button active" : "nav-button"}
+            onClick={handleAdminClick}
+          >
+            🛡️ Admin
+          </button>
+        </nav>
       </header>
 
-      <main>
+      <main className="dashboard">
         {role === "citizen" && (
           <>
-            <section>
-              <h2>Submit a Grievance</h2>
+            <section className="hero-card">
+              <div className="hero-content">
+                <span className="eyebrow">SMART CIVIC PLATFORM</span>
 
-              <form onSubmit={handleSubmit}>
-                <input
-                  name="name"
-                  placeholder="Your Name"
-                  value={grievance.name}
-                  onChange={handleChange}
-                  required
-                />
+                <h2>Make your city better.</h2>
 
-                <input
-                  name="location"
-                  placeholder="Location"
-                  value={grievance.location}
-                  onChange={handleChange}
-                  required
-                />
+                <p>
+                  Report civic issues, track their progress, and help local
+                  authorities build cleaner, safer and better-connected
+                  communities.
+                </p>
 
-                <textarea
-                  name="description"
-                  placeholder="Describe your grievance"
-                  value={grievance.description}
-                  onChange={handleChange}
-                  required
-                />
+                <div className="hero-stats">
+                  <div>
+                    <strong>{total}</strong>
+                    <span>Total Reports</span>
+                  </div>
 
-                {error && <p>{error}</p>}
+                  <div>
+                    <strong>{resolved}</strong>
+                    <span>Resolved</span>
+                  </div>
 
-                <button type="submit">
-                  Submit Grievance
-                </button>
-              </form>
-            </section>
-
-            <section>
-              <h2>Track Grievance</h2>
-
-              <form onSubmit={trackGrievance}>
-                <input
-                  type="text"
-                  placeholder="Enter Grievance ID"
-                  value={trackingId}
-                  onChange={(event) =>
-                    setTrackingId(event.target.value)
-                  }
-                  required
-                />
-
-                <button type="submit">
-                  Track Grievance
-                </button>
-              </form>
-
-              {trackingMessage && <p>{trackingMessage}</p>}
-
-              {trackedGrievance && (
-                <div>
-                  <h3>{trackedGrievance.description}</h3>
-
-                  <p>ID: {trackedGrievance.id}</p>
-
-                  <p>
-                    Category: {trackedGrievance.category}
-                  </p>
-
-                  <p>
-                    Department: {trackedGrievance.department}
-                  </p>
-
-                  <p>
-                    Priority:{" "}
-                    <span
-                      className={getPriorityClass(
-                        trackedGrievance.priority
-                      )}
-                    >
-                      {trackedGrievance.priority}
-                    </span>
-                  </p>
-
-                  <p>
-                    Status:{" "}
-                    <span
-                      className={getStatusClass(
-                        trackedGrievance.status
-                      )}
-                    >
-                      {trackedGrievance.status}
-                    </span>
-                  </p>
-
-                  <p>
-                    Submitted:{" "}
-                    {formatDate(trackedGrievance.createdAt)}
-                  </p>
+                  <div>
+                    <strong>{pending}</strong>
+                    <span>Pending</span>
+                  </div>
                 </div>
-              )}
+              </div>
+
+              <div className="hero-visual">
+                <div className="city-circle">🏙️</div>
+              </div>
             </section>
+
+            <div className="citizen-grid">
+              <section className="card">
+                <div className="section-heading">
+                  <div className="section-icon">📝</div>
+
+                  <div>
+                    <h2>Submit a Grievance</h2>
+                    <p>Tell us what needs attention in your area.</p>
+                  </div>
+                </div>
+
+                <form onSubmit={handleSubmit}>
+                  <div className="form-group">
+                    <label>Your Name</label>
+
+                    <input
+                      name="name"
+                      placeholder="Enter your full name"
+                      value={grievance.name}
+                      onChange={handleChange}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Location</label>
+
+                    <input
+                      name="location"
+                      placeholder="City, area or landmark"
+                      value={grievance.location}
+                      onChange={handleChange}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Describe the Issue</label>
+
+                    <textarea
+                      name="description"
+                      placeholder="Describe the problem in detail..."
+                      value={grievance.description}
+                      onChange={handleChange}
+                      required
+                    />
+                  </div>
+
+                  {error && (
+                    <div className="error-message">
+                      ⚠️ {error}
+                    </div>
+                  )}
+
+                  <button className="primary-button" type="submit">
+                    Submit Grievance →
+                  </button>
+                </form>
+              </section>
+
+              <section className="card tracking-card">
+                <div className="section-heading">
+                  <div className="section-icon">🔎</div>
+
+                  <div>
+                    <h2>Track Your Grievance</h2>
+                    <p>Check the current status of your report.</p>
+                  </div>
+                </div>
+
+                <form onSubmit={trackGrievance}>
+                  <div className="form-group">
+                    <label>Grievance ID</label>
+
+                    <input
+                      type="text"
+                      placeholder="e.g. 1"
+                      value={trackingId}
+                      onChange={(event) =>
+                        setTrackingId(event.target.value)
+                      }
+                      required
+                    />
+                  </div>
+
+                  <button className="secondary-button" type="submit">
+                    Track Status
+                  </button>
+                </form>
+
+                {trackingMessage && (
+                  <div className="error-message">
+                    {trackingMessage}
+                  </div>
+                )}
+
+                {trackedGrievance && (
+                  <div className="tracking-result">
+                    <div className="tracking-header">
+                      <div>
+                        <span>Grievance</span>
+                        <strong>#{trackedGrievance.id}</strong>
+                      </div>
+
+                      <span
+                        className={getStatusClass(
+                          trackedGrievance.status
+                        )}
+                      >
+                        {trackedGrievance.status}
+                      </span>
+                    </div>
+
+                    <h3>{trackedGrievance.description}</h3>
+
+                    <div className="detail-grid">
+                      <div>
+                        <span>Category</span>
+                        <strong>{trackedGrievance.category}</strong>
+                      </div>
+
+                      <div>
+                        <span>Department</span>
+                        <strong>{trackedGrievance.department}</strong>
+                      </div>
+
+                      <div>
+                        <span>Priority</span>
+                        <strong>
+                          <span
+                            className={getPriorityClass(
+                              trackedGrievance.priority
+                            )}
+                          >
+                            {trackedGrievance.priority}
+                          </span>
+                        </strong>
+                      </div>
+
+                      <div>
+                        <span>Location</span>
+                        <strong>{trackedGrievance.location}</strong>
+                      </div>
+                    </div>
+
+                    <p className="submitted-date">
+                      Submitted: {formatDate(trackedGrievance.createdAt)}
+                    </p>
+                  </div>
+                )}
+
+                {!trackedGrievance && !trackingMessage && (
+                  <div className="empty-state">
+                    <span>📍</span>
+                    <p>Enter your grievance ID to see its status.</p>
+                  </div>
+                )}
+              </section>
+            </div>
           </>
         )}
 
         {role === "admin" && (
           <>
-            <section>
-              <h2>Admin Dashboard</h2>
-
+            <section className="admin-header-card">
               <div>
-                <h3>Total</h3>
-                <p>{total}</p>
+                <span className="eyebrow">ADMINISTRATION</span>
+                <h2>CitySet Control Center</h2>
+                <p>
+                  Monitor, analyze and manage citizen grievances from one
+                  place.
+                </p>
               </div>
 
-              <div>
-                <h3>Pending</h3>
-                <p>{pending}</p>
+              <button
+                className="export-button"
+                type="button"
+                onClick={exportToCSV}
+                disabled={total === 0}
+              >
+                ↓ Export CSV
+              </button>
+            </section>
+
+            <section className="metric-grid">
+              <div className="metric-card">
+                <span className="metric-icon blue">📊</span>
+                <div>
+                  <span>Total Grievances</span>
+                  <strong>{total}</strong>
+                </div>
               </div>
 
-              <div>
-                <h3>In Progress</h3>
-                <p>{inProgress}</p>
+              <div className="metric-card">
+                <span className="metric-icon yellow">⏳</span>
+                <div>
+                  <span>Pending</span>
+                  <strong>{pending}</strong>
+                </div>
               </div>
 
-              <div>
-                <h3>Resolved</h3>
-                <p>{resolved}</p>
+              <div className="metric-card">
+                <span className="metric-icon purple">⚙️</span>
+                <div>
+                  <span>In Progress</span>
+                  <strong>{inProgress}</strong>
+                </div>
               </div>
 
-              <div>
-                <h3>High Priority</h3>
-                <p>{highPriority}</p>
+              <div className="metric-card">
+                <span className="metric-icon green">✓</span>
+                <div>
+                  <span>Resolved</span>
+                  <strong>{resolved}</strong>
+                </div>
               </div>
 
-              <div>
-                <button
-                  type="button"
-                  onClick={exportToCSV}
-                  disabled={total === 0}
-                >
-                  Export CSV
-                </button>
+              <div className="metric-card">
+                <span className="metric-icon red">!</span>
+                <div>
+                  <span>High Priority</span>
+                  <strong>{highPriority}</strong>
+                </div>
               </div>
             </section>
 
-            <section>
-              <h2>Status Overview</h2>
+            <div className="analytics-grid">
+              <section className="card">
+                <div className="section-heading">
+                  <div className="section-icon">📈</div>
 
-              {total === 0 ? (
-                <p>No grievances submitted yet.</p>
-              ) : (
-                statusBreakdown.map((item) => (
-                  <div className="stat-row" key={item.label}>
-                    <span className="stat-label">
-                      {item.label}
-                    </span>
-
-                    <span className="stat-track">
-                      <span
-                        className={`stat-fill ${item.className}`}
-                        style={{
-                          width: `${
-                            (item.count / total) * 100
-                          }%`,
-                        }}
-                      />
-                    </span>
-
-                    <span className="stat-count">
-                      {item.count}
-                    </span>
+                  <div>
+                    <h2>Status Overview</h2>
+                    <p>Current grievance resolution progress.</p>
                   </div>
-                ))
-              )}
-            </section>
+                </div>
 
-            <section>
-              <h2>Category Analytics</h2>
+                {total === 0 ? (
+                  <div className="empty-state">
+                    <span>📭</span>
+                    <p>No grievances submitted yet.</p>
+                  </div>
+                ) : (
+                  <div className="analytics-list">
+                    {statusBreakdown.map((item) => (
+                      <div className="stat-row" key={item.label}>
+                        <span className="stat-label">{item.label}</span>
 
-              {Object.keys(categoryCounts).length === 0 ? (
-                <p>No category data available.</p>
-              ) : (
-                Object.entries(categoryCounts).map(
-                  ([category, count]) => (
-                    <div className="stat-row" key={category}>
-                      <span className="stat-label">
-                        {category}
-                      </span>
+                        <span className="stat-track">
+                          <span
+                            className={`stat-fill ${item.className}`}
+                            style={{
+                              width: `${(item.count / total) * 100}%`,
+                            }}
+                          />
+                        </span>
 
-                      <span className="stat-track">
-                        <span
-                          className="stat-fill category"
-                          style={{
-                            width: `${(count / total) * 100}%`,
-                          }}
-                        />
-                      </span>
+                        <span className="stat-count">{item.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
 
-                      <span className="stat-count">
-                        {count}
-                      </span>
-                    </div>
-                  )
-                )
-              )}
-            </section>
+              <section className="card">
+                <div className="section-heading">
+                  <div className="section-icon">🗂️</div>
 
-            <section>
-              <h2>Location Insights</h2>
+                  <div>
+                    <h2>Category Analytics</h2>
+                    <p>Issues grouped by civic department.</p>
+                  </div>
+                </div>
+
+                {Object.keys(categoryCounts).length === 0 ? (
+                  <div className="empty-state">
+                    <span>📂</span>
+                    <p>No category data available.</p>
+                  </div>
+                ) : (
+                  <div className="analytics-list">
+                    {Object.entries(categoryCounts).map(
+                      ([category, count]) => (
+                        <div className="stat-row" key={category}>
+                          <span className="stat-label">{category}</span>
+
+                          <span className="stat-track">
+                            <span
+                              className="stat-fill category"
+                              style={{
+                                width: `${(count / total) * 100}%`,
+                              }}
+                            />
+                          </span>
+
+                          <span className="stat-count">{count}</span>
+                        </div>
+                      )
+                    )}
+                  </div>
+                )}
+              </section>
+            </div>
+
+            <section className="card">
+              <div className="section-heading">
+                <div className="section-icon">📍</div>
+
+                <div>
+                  <h2>Location Insights</h2>
+                  <p>Areas generating the highest number of reports.</p>
+                </div>
+              </div>
 
               {locationInsights.length === 0 ? (
-                <p>No location data available.</p>
+                <div className="empty-state">
+                  <span>📍</span>
+                  <p>No location data available.</p>
+                </div>
               ) : (
-                locationInsights.map(
-                  ([location, count], index) => (
-                    <div key={location}>
-                      <h3>
-                        #{index + 1} {location}
-                      </h3>
+                <div className="location-grid">
+                  {locationInsights.map(([location, count], index) => (
+                    <div className="location-card" key={location}>
+                      <div className="location-rank">
+                        #{index + 1}
+                      </div>
 
-                      <p>
-                        {count} grievance
-                        {count !== 1 ? "s" : ""}
-                      </p>
+                      <div>
+                        <strong>{location}</strong>
+                        <span>
+                          {count} grievance{count !== 1 ? "s" : ""}
+                        </span>
+                      </div>
                     </div>
-                  )
-                )
+                  ))}
+                </div>
               )}
             </section>
 
-            <section>
-              <h2>Search & Filter</h2>
+            <section className="card">
+              <div className="section-heading">
+                <div className="section-icon">🔍</div>
 
-              <input
-                type="text"
-                placeholder="Search grievances..."
-                value={search}
-                onChange={(event) =>
-                  setSearch(event.target.value)
-                }
-              />
+                <div>
+                  <h2>Search & Filter</h2>
+                  <p>Find specific grievances quickly.</p>
+                </div>
+              </div>
 
-              <select
-                value={statusFilter}
-                onChange={(event) =>
-                  setStatusFilter(event.target.value)
-                }
-              >
-                <option value="All">All Statuses</option>
-                <option value="Pending">Pending</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Resolved">Resolved</option>
-              </select>
+              <div className="filter-grid">
+                <input
+                  type="text"
+                  placeholder="Search by name, location or issue..."
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
 
-              <select
-                value={priorityFilter}
-                onChange={(event) =>
-                  setPriorityFilter(event.target.value)
-                }
-              >
-                <option value="All">All Priorities</option>
-                <option value="High">High</option>
-                <option value="Medium">Medium</option>
-              </select>
+                <select
+                  value={statusFilter}
+                  onChange={(event) =>
+                    setStatusFilter(event.target.value)
+                  }
+                >
+                  <option value="All">All Statuses</option>
+                  <option value="Pending">Pending</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="Resolved">Resolved</option>
+                </select>
 
-              <select
-                value={categoryFilter}
-                onChange={(event) =>
-                  setCategoryFilter(event.target.value)
-                }
-              >
-                <option value="All">All Categories</option>
-                <option value="Sanitation">Sanitation</option>
-                <option value="Electricity">Electricity</option>
-                <option value="Water Supply">
-                  Water Supply
-                </option>
-                <option value="Roads & Transport">
-                  Roads & Transport
-                </option>
-                <option value="Other">Other</option>
-              </select>
+                <select
+                  value={priorityFilter}
+                  onChange={(event) =>
+                    setPriorityFilter(event.target.value)
+                  }
+                >
+                  <option value="All">All Priorities</option>
+                  <option value="High">High</option>
+                  <option value="Medium">Medium</option>
+                </select>
+
+                <select
+                  value={categoryFilter}
+                  onChange={(event) =>
+                    setCategoryFilter(event.target.value)
+                  }
+                >
+                  <option value="All">All Categories</option>
+                  <option value="Sanitation">Sanitation</option>
+                  <option value="Electricity">Electricity</option>
+                  <option value="Water Supply">Water Supply</option>
+                  <option value="Roads & Transport">
+                    Roads & Transport
+                  </option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
             </section>
 
-            <section>
-              <h2>Manage Grievances</h2>
+            <section className="card">
+              <div className="section-heading">
+                <div className="section-icon">📋</div>
 
-              {filteredGrievances.map((item) => (
-                <div key={item.id}>
+                <div>
+                  <h2>Manage Grievances</h2>
                   <p>
-                    <strong>ID:</strong> {item.id}
+                    {filteredGrievances.length} of {total} grievances shown.
                   </p>
-
-                  <h3>{item.description}</h3>
-
-                  <p>Name: {item.name}</p>
-                  <p>Location: {item.location}</p>
-                  <p>Category: {item.category}</p>
-                  <p>Department: {item.department}</p>
-
-                  <p>
-                    Priority:{" "}
-                    <span
-                      className={getPriorityClass(
-                        item.priority
-                      )}
-                    >
-                      {item.priority}
-                    </span>
-                  </p>
-
-                  <p>
-                    Status:{" "}
-                    <span
-                      className={getStatusClass(item.status)}
-                    >
-                      {item.status}
-                    </span>
-                  </p>
-
-                  <select
-                    value={item.status}
-                    onChange={(event) =>
-                      updateStatus(
-                        item.id,
-                        event.target.value
-                      )
-                    }
-                  >
-                    <option value="Pending">
-                      Pending
-                    </option>
-
-                    <option value="In Progress">
-                      In Progress
-                    </option>
-
-                    <option value="Resolved">
-                      Resolved
-                    </option>
-                  </select>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      deleteGrievance(item.id)
-                    }
-                  >
-                    Delete
-                  </button>
                 </div>
-              ))}
+              </div>
+
+              {filteredGrievances.length === 0 ? (
+                <div className="empty-state">
+                  <span>🔎</span>
+                  <p>No grievances match your filters.</p>
+                </div>
+              ) : (
+                <div className="grievance-list">
+                  {filteredGrievances.map((item) => (
+                    <div className="grievance-card" key={item.id}>
+                      <div className="grievance-top">
+                        <div>
+                          <span className="grievance-id">
+                            GRIEVANCE #{item.id}
+                          </span>
+
+                          <h3>{item.description}</h3>
+                        </div>
+
+                        <span
+                          className={getStatusClass(item.status)}
+                        >
+                          {item.status}
+                        </span>
+                      </div>
+
+                      <div className="grievance-details">
+                        <div>
+                          <span>Citizen</span>
+                          <strong>{item.name}</strong>
+                        </div>
+
+                        <div>
+                          <span>Location</span>
+                          <strong>{item.location}</strong>
+                        </div>
+
+                        <div>
+                          <span>Category</span>
+                          <strong>{item.category}</strong>
+                        </div>
+
+                        <div>
+                          <span>Department</span>
+                          <strong>{item.department}</strong>
+                        </div>
+
+                        <div>
+                          <span>Priority</span>
+                          <strong>
+                            <span
+                              className={getPriorityClass(
+                                item.priority
+                              )}
+                            >
+                              {item.priority}
+                            </span>
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="grievance-actions">
+                        <select
+                          value={item.status}
+                          onChange={(event) =>
+                            updateStatus(
+                              item.id,
+                              event.target.value
+                            )
+                          }
+                        >
+                          <option value="Pending">Pending</option>
+                          <option value="In Progress">
+                            In Progress
+                          </option>
+                          <option value="Resolved">Resolved</option>
+                        </select>
+
+                        <button
+                          className="delete-button"
+                          type="button"
+                          onClick={() =>
+                            deleteGrievance(item.id)
+                          }
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
           </>
         )}
       </main>
+
+      <footer>
+        <strong>CitySet</strong>
+        <span>Building better cities, one grievance at a time.</span>
+      </footer>
     </div>
   );
 }
