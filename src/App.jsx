@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import classifyGrievance from "./utils/classifier";
+import { uploadGrievanceMedia } from "./Services/grievanceService";
 
 const API_URL = "http://localhost:8080/api/grievances";
+
 const ADMIN_PASSCODE = "admin123";
 
 function App() {
@@ -13,6 +15,8 @@ function App() {
     description: "",
     location: "",
   });
+
+  const [selectedFiles, setSelectedFiles] = useState([]);
 
   const [grievances, setGrievances] = useState([]);
   const [error, setError] = useState("");
@@ -63,6 +67,43 @@ function App() {
     setError("");
   }
 
+  function handleFilesChange(event) {
+    const files = Array.from(event.target.files || []);
+
+    if (files.length > 3) {
+      setError("You can upload a maximum of 3 files.");
+      setSelectedFiles([]);
+      event.target.value = "";
+      return;
+    }
+
+    for (const file of files) {
+      const isImage = file.type.startsWith("image/");
+      const isMp4 = file.type === "video/mp4";
+
+      if (!isImage && !isMp4) {
+        setError(
+          `"${file.name}" is not supported. Please select images or MP4 videos.`
+        );
+        setSelectedFiles([]);
+        event.target.value = "";
+        return;
+      }
+
+      if (file.size > 20 * 1024 * 1024) {
+        setError(
+          `"${file.name}" is too large. Each file must be smaller than 20 MB.`
+        );
+        setSelectedFiles([]);
+        event.target.value = "";
+        return;
+      }
+    }
+
+    setSelectedFiles(files);
+    setError("");
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
 
@@ -110,6 +151,7 @@ function App() {
         status: "Pending",
       };
 
+      // Step 1: Create the grievance
       const response = await fetch(API_URL, {
         method: "POST",
         headers: {
@@ -124,15 +166,59 @@ function App() {
 
       const savedGrievance = await response.json();
 
-      setGrievances((previous) => [...previous, savedGrievance]);
+      // Step 2: Upload media after the grievance gets its ID
+      if (selectedFiles.length > 0) {
+        try {
+          await uploadGrievanceMedia(
+            savedGrievance.id,
+            selectedFiles
+          );
+        } catch (mediaError) {
+          console.error(mediaError);
 
+          setError(
+            "Grievance was submitted, but the media upload failed. You can still track the grievance."
+          );
+
+          setGrievances((previous) => [
+            ...previous,
+            savedGrievance,
+          ]);
+
+          setGrievance({
+            name: "",
+            description: "",
+            location: "",
+          });
+
+          setSelectedFiles([]);
+
+          setTrackedGrievance(savedGrievance);
+          setTrackingId(String(savedGrievance.id));
+          setTrackingMessage("");
+
+          return;
+        }
+      }
+
+      // Update frontend state
+      setGrievances((previous) => [
+        ...previous,
+        savedGrievance,
+      ]);
+
+      // Clear form
       setGrievance({
         name: "",
         description: "",
         location: "",
       });
 
+      setSelectedFiles([]);
+
       setError("");
+
+      // Automatically show the submitted grievance
       setTrackedGrievance(savedGrievance);
       setTrackingId(String(savedGrievance.id));
       setTrackingMessage("");
@@ -142,6 +228,7 @@ function App() {
       );
     } catch (error) {
       console.error(error);
+
       setError(
         "Could not submit grievance. Make sure the backend is running."
       );
@@ -151,7 +238,9 @@ function App() {
   async function updateStatus(id, newStatus) {
     try {
       const response = await fetch(
-        `${API_URL}/${id}/status?status=${encodeURIComponent(newStatus)}`,
+        `${API_URL}/${id}/status?status=${encodeURIComponent(
+          newStatus
+        )}`,
         {
           method: "PUT",
         }
@@ -165,7 +254,9 @@ function App() {
 
       setGrievances((previous) =>
         previous.map((item) =>
-          item.id === updatedGrievance.id ? updatedGrievance : item
+          item.id === updatedGrievance.id
+            ? updatedGrievance
+            : item
         )
       );
 
@@ -214,14 +305,18 @@ function App() {
 
     const id = trackingId.trim();
 
-    const result = grievances.find((item) => String(item.id) === id);
+    const result = grievances.find(
+      (item) => String(item.id) === id
+    );
 
     if (result) {
       setTrackedGrievance(result);
       setTrackingMessage("");
     } else {
       setTrackedGrievance(null);
-      setTrackingMessage("No grievance found with this ID.");
+      setTrackingMessage(
+        "No grievance found with this ID."
+      );
     }
   }
 
@@ -259,7 +354,9 @@ function App() {
       return;
     }
 
-    const enteredCode = window.prompt("Enter admin passcode:");
+    const enteredCode = window.prompt(
+      "Enter admin passcode:"
+    );
 
     if (enteredCode === null) {
       return;
@@ -297,7 +394,10 @@ function App() {
     const csvContent = [headers, ...rows]
       .map((row) =>
         row
-          .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
+          .map(
+            (cell) =>
+              `"${String(cell).replace(/"/g, '""')}"`
+          )
           .join(",")
       )
       .join("\n");
@@ -338,18 +438,27 @@ function App() {
     const searchText = search.toLowerCase();
 
     const matchesSearch =
-      item.description?.toLowerCase().includes(searchText) ||
-      item.name?.toLowerCase().includes(searchText) ||
-      item.location?.toLowerCase().includes(searchText);
+      item.description
+        ?.toLowerCase()
+        .includes(searchText) ||
+      item.name
+        ?.toLowerCase()
+        .includes(searchText) ||
+      item.location
+        ?.toLowerCase()
+        .includes(searchText);
 
     const matchesStatus =
-      statusFilter === "All" || item.status === statusFilter;
+      statusFilter === "All" ||
+      item.status === statusFilter;
 
     const matchesPriority =
-      priorityFilter === "All" || item.priority === priorityFilter;
+      priorityFilter === "All" ||
+      item.priority === priorityFilter;
 
     const matchesCategory =
-      categoryFilter === "All" || item.category === categoryFilter;
+      categoryFilter === "All" ||
+      item.category === categoryFilter;
 
     return (
       matchesSearch &&
@@ -359,24 +468,33 @@ function App() {
     );
   });
 
-  const categoryCounts = grievances.reduce((counts, item) => {
-    counts[item.category] = (counts[item.category] || 0) + 1;
-    return counts;
-  }, {});
+  const categoryCounts = grievances.reduce(
+    (counts, item) => {
+      counts[item.category] =
+        (counts[item.category] || 0) + 1;
 
-  const locationCounts = grievances.reduce((counts, item) => {
-    const location = item.location?.trim();
-
-    if (location) {
-      counts[location] = (counts[location] || 0) + 1;
-    }
-
-    return counts;
-  }, {});
-
-  const locationInsights = Object.entries(locationCounts).sort(
-    (a, b) => b[1] - a[1]
+      return counts;
+    },
+    {}
   );
+
+  const locationCounts = grievances.reduce(
+    (counts, item) => {
+      const location = item.location?.trim();
+
+      if (location) {
+        counts[location] =
+          (counts[location] || 0) + 1;
+      }
+
+      return counts;
+    },
+    {}
+  );
+
+  const locationInsights = Object.entries(
+    locationCounts
+  ).sort((a, b) => b[1] - a[1]);
 
   const statusBreakdown = [
     {
@@ -422,14 +540,22 @@ function App() {
 
         <nav className="nav-actions">
           <button
-            className={role === "citizen" ? "nav-button active" : "nav-button"}
+            className={
+              role === "citizen"
+                ? "nav-button active"
+                : "nav-button"
+            }
             onClick={() => setRole("citizen")}
           >
             👤 Citizen
           </button>
 
           <button
-            className={role === "admin" ? "nav-button active" : "nav-button"}
+            className={
+              role === "admin"
+                ? "nav-button active"
+                : "nav-button"
+            }
             onClick={handleAdminClick}
           >
             🛡️ Admin
@@ -442,14 +568,16 @@ function App() {
           <>
             <section className="hero-card">
               <div className="hero-content">
-                <span className="eyebrow">SMART CIVIC PLATFORM</span>
+                <span className="eyebrow">
+                  SMART CIVIC PLATFORM
+                </span>
 
                 <h2>Make your city better.</h2>
 
                 <p>
-                  Report civic issues, track their progress, and help local
-                  authorities build cleaner, safer and better-connected
-                  communities.
+                  Report civic issues, track their progress,
+                  and help local authorities build cleaner,
+                  safer and better-connected communities.
                 </p>
 
                 <div className="hero-stats">
@@ -482,7 +610,10 @@ function App() {
 
                   <div>
                     <h2>Submit a Grievance</h2>
-                    <p>Tell us what needs attention in your area.</p>
+                    <p>
+                      Tell us what needs attention in your
+                      area.
+                    </p>
                   </div>
                 </div>
 
@@ -521,6 +652,62 @@ function App() {
                       onChange={handleChange}
                       required
                     />
+
+                    <label
+                      htmlFor="grievance-media"
+                      className="media-upload"
+                    >
+                      <span>
+                        📎 Attach photos or videos
+                      </span>
+
+                      <input
+                        id="grievance-media"
+                        type="file"
+                        accept="image/*,video/mp4"
+                        multiple
+                        onChange={handleFilesChange}
+                      />
+
+                      <small>
+                        Maximum 3 files • Images and MP4
+                        videos • 20 MB per file
+                      </small>
+                    </label>
+
+                    {selectedFiles.length > 0 && (
+                      <div className="selected-files">
+                        <strong>
+                          Selected files:
+                        </strong>
+
+                        {selectedFiles.map(
+                          (file, index) => (
+                            <div
+                              className="selected-file"
+                              key={`${file.name}-${index}`}
+                            >
+                              <span>
+                                {file.type.startsWith(
+                                  "video/"
+                                )
+                                  ? "🎥"
+                                  : "🖼️"}{" "}
+                                {file.name}
+                              </span>
+
+                              <small>
+                                {(
+                                  file.size /
+                                  (1024 * 1024)
+                                ).toFixed(2)}{" "}
+                                MB
+                              </small>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {error && (
@@ -529,7 +716,10 @@ function App() {
                     </div>
                   )}
 
-                  <button className="primary-button" type="submit">
+                  <button
+                    className="primary-button"
+                    type="submit"
+                  >
                     Submit Grievance →
                   </button>
                 </form>
@@ -541,7 +731,10 @@ function App() {
 
                   <div>
                     <h2>Track Your Grievance</h2>
-                    <p>Check the current status of your report.</p>
+                    <p>
+                      Check the current status of your
+                      report.
+                    </p>
                   </div>
                 </div>
 
@@ -554,13 +747,18 @@ function App() {
                       placeholder="e.g. 1"
                       value={trackingId}
                       onChange={(event) =>
-                        setTrackingId(event.target.value)
+                        setTrackingId(
+                          event.target.value
+                        )
                       }
                       required
                     />
                   </div>
 
-                  <button className="secondary-button" type="submit">
+                  <button
+                    className="secondary-button"
+                    type="submit"
+                  >
                     Track Status
                   </button>
                 </form>
@@ -576,7 +774,9 @@ function App() {
                     <div className="tracking-header">
                       <div>
                         <span>Grievance</span>
-                        <strong>#{trackedGrievance.id}</strong>
+                        <strong>
+                          #{trackedGrievance.id}
+                        </strong>
                       </div>
 
                       <span
@@ -588,17 +788,23 @@ function App() {
                       </span>
                     </div>
 
-                    <h3>{trackedGrievance.description}</h3>
+                    <h3>
+                      {trackedGrievance.description}
+                    </h3>
 
                     <div className="detail-grid">
                       <div>
                         <span>Category</span>
-                        <strong>{trackedGrievance.category}</strong>
+                        <strong>
+                          {trackedGrievance.category}
+                        </strong>
                       </div>
 
                       <div>
                         <span>Department</span>
-                        <strong>{trackedGrievance.department}</strong>
+                        <strong>
+                          {trackedGrievance.department}
+                        </strong>
                       </div>
 
                       <div>
@@ -616,22 +822,31 @@ function App() {
 
                       <div>
                         <span>Location</span>
-                        <strong>{trackedGrievance.location}</strong>
+                        <strong>
+                          {trackedGrievance.location}
+                        </strong>
                       </div>
                     </div>
 
                     <p className="submitted-date">
-                      Submitted: {formatDate(trackedGrievance.createdAt)}
+                      Submitted:{" "}
+                      {formatDate(
+                        trackedGrievance.createdAt
+                      )}
                     </p>
                   </div>
                 )}
 
-                {!trackedGrievance && !trackingMessage && (
-                  <div className="empty-state">
-                    <span>📍</span>
-                    <p>Enter your grievance ID to see its status.</p>
-                  </div>
-                )}
+                {!trackedGrievance &&
+                  !trackingMessage && (
+                    <div className="empty-state">
+                      <span>📍</span>
+                      <p>
+                        Enter your grievance ID to see
+                        its status.
+                      </p>
+                    </div>
+                  )}
               </section>
             </div>
           </>
@@ -641,11 +856,15 @@ function App() {
           <>
             <section className="admin-header-card">
               <div>
-                <span className="eyebrow">ADMINISTRATION</span>
+                <span className="eyebrow">
+                  ADMINISTRATION
+                </span>
+
                 <h2>CitySet Control Center</h2>
+
                 <p>
-                  Monitor, analyze and manage citizen grievances from one
-                  place.
+                  Monitor, analyze and manage citizen
+                  grievances from one place.
                 </p>
               </div>
 
@@ -661,7 +880,10 @@ function App() {
 
             <section className="metric-grid">
               <div className="metric-card">
-                <span className="metric-icon blue">📊</span>
+                <span className="metric-icon blue">
+                  📊
+                </span>
+
                 <div>
                   <span>Total Grievances</span>
                   <strong>{total}</strong>
@@ -669,7 +891,10 @@ function App() {
               </div>
 
               <div className="metric-card">
-                <span className="metric-icon yellow">⏳</span>
+                <span className="metric-icon yellow">
+                  ⏳
+                </span>
+
                 <div>
                   <span>Pending</span>
                   <strong>{pending}</strong>
@@ -677,7 +902,10 @@ function App() {
               </div>
 
               <div className="metric-card">
-                <span className="metric-icon purple">⚙️</span>
+                <span className="metric-icon purple">
+                  ⚙️
+                </span>
+
                 <div>
                   <span>In Progress</span>
                   <strong>{inProgress}</strong>
@@ -685,7 +913,10 @@ function App() {
               </div>
 
               <div className="metric-card">
-                <span className="metric-icon green">✓</span>
+                <span className="metric-icon green">
+                  ✓
+                </span>
+
                 <div>
                   <span>Resolved</span>
                   <strong>{resolved}</strong>
@@ -693,7 +924,10 @@ function App() {
               </div>
 
               <div className="metric-card">
-                <span className="metric-icon red">!</span>
+                <span className="metric-icon red">
+                  !
+                </span>
+
                 <div>
                   <span>High Priority</span>
                   <strong>{highPriority}</strong>
@@ -708,7 +942,10 @@ function App() {
 
                   <div>
                     <h2>Status Overview</h2>
-                    <p>Current grievance resolution progress.</p>
+                    <p>
+                      Current grievance resolution
+                      progress.
+                    </p>
                   </div>
                 </div>
 
@@ -720,19 +957,29 @@ function App() {
                 ) : (
                   <div className="analytics-list">
                     {statusBreakdown.map((item) => (
-                      <div className="stat-row" key={item.label}>
-                        <span className="stat-label">{item.label}</span>
+                      <div
+                        className="stat-row"
+                        key={item.label}
+                      >
+                        <span className="stat-label">
+                          {item.label}
+                        </span>
 
                         <span className="stat-track">
                           <span
                             className={`stat-fill ${item.className}`}
                             style={{
-                              width: `${(item.count / total) * 100}%`,
+                              width: `${
+                                (item.count / total) *
+                                100
+                              }%`,
                             }}
                           />
                         </span>
 
-                        <span className="stat-count">{item.count}</span>
+                        <span className="stat-count">
+                          {item.count}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -745,35 +992,51 @@ function App() {
 
                   <div>
                     <h2>Category Analytics</h2>
-                    <p>Issues grouped by civic department.</p>
+                    <p>
+                      Issues grouped by civic
+                      department.
+                    </p>
                   </div>
                 </div>
 
-                {Object.keys(categoryCounts).length === 0 ? (
+                {Object.keys(categoryCounts).length ===
+                0 ? (
                   <div className="empty-state">
                     <span>📂</span>
-                    <p>No category data available.</p>
+                    <p>
+                      No category data available.
+                    </p>
                   </div>
                 ) : (
                   <div className="analytics-list">
-                    {Object.entries(categoryCounts).map(
-                      ([category, count]) => (
-                        <div className="stat-row" key={category}>
-                          <span className="stat-label">{category}</span>
+                    {Object.entries(
+                      categoryCounts
+                    ).map(([category, count]) => (
+                      <div
+                        className="stat-row"
+                        key={category}
+                      >
+                        <span className="stat-label">
+                          {category}
+                        </span>
 
-                          <span className="stat-track">
-                            <span
-                              className="stat-fill category"
-                              style={{
-                                width: `${(count / total) * 100}%`,
-                              }}
-                            />
-                          </span>
+                        <span className="stat-track">
+                          <span
+                            className="stat-fill category"
+                            style={{
+                              width: `${
+                                (count / total) *
+                                100
+                              }%`,
+                            }}
+                          />
+                        </span>
 
-                          <span className="stat-count">{count}</span>
-                        </div>
-                      )
-                    )}
+                        <span className="stat-count">
+                          {count}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 )}
               </section>
@@ -785,31 +1048,42 @@ function App() {
 
                 <div>
                   <h2>Location Insights</h2>
-                  <p>Areas generating the highest number of reports.</p>
+                  <p>
+                    Areas generating the highest
+                    number of reports.
+                  </p>
                 </div>
               </div>
 
               {locationInsights.length === 0 ? (
                 <div className="empty-state">
                   <span>📍</span>
-                  <p>No location data available.</p>
+                  <p>
+                    No location data available.
+                  </p>
                 </div>
               ) : (
                 <div className="location-grid">
-                  {locationInsights.map(([location, count], index) => (
-                    <div className="location-card" key={location}>
-                      <div className="location-rank">
-                        #{index + 1}
-                      </div>
+                  {locationInsights.map(
+                    ([location, count], index) => (
+                      <div
+                        className="location-card"
+                        key={location}
+                      >
+                        <div className="location-rank">
+                          #{index + 1}
+                        </div>
 
-                      <div>
-                        <strong>{location}</strong>
-                        <span>
-                          {count} grievance{count !== 1 ? "s" : ""}
-                        </span>
+                        <div>
+                          <strong>{location}</strong>
+                          <span>
+                            {count} grievance
+                            {count !== 1 ? "s" : ""}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  )}
                 </div>
               )}
             </section>
@@ -820,7 +1094,10 @@ function App() {
 
                 <div>
                   <h2>Search & Filter</h2>
-                  <p>Find specific grievances quickly.</p>
+                  <p>
+                    Find specific grievances
+                    quickly.
+                  </p>
                 </div>
               </div>
 
@@ -829,7 +1106,9 @@ function App() {
                   type="text"
                   placeholder="Search by name, location or issue..."
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
+                  onChange={(event) =>
+                    setSearch(event.target.value)
+                  }
                 />
 
                 <select
@@ -838,10 +1117,18 @@ function App() {
                     setStatusFilter(event.target.value)
                   }
                 >
-                  <option value="All">All Statuses</option>
-                  <option value="Pending">Pending</option>
-                  <option value="In Progress">In Progress</option>
-                  <option value="Resolved">Resolved</option>
+                  <option value="All">
+                    All Statuses
+                  </option>
+                  <option value="Pending">
+                    Pending
+                  </option>
+                  <option value="In Progress">
+                    In Progress
+                  </option>
+                  <option value="Resolved">
+                    Resolved
+                  </option>
                 </select>
 
                 <select
@@ -850,9 +1137,13 @@ function App() {
                     setPriorityFilter(event.target.value)
                   }
                 >
-                  <option value="All">All Priorities</option>
+                  <option value="All">
+                    All Priorities
+                  </option>
                   <option value="High">High</option>
-                  <option value="Medium">Medium</option>
+                  <option value="Medium">
+                    Medium
+                  </option>
                 </select>
 
                 <select
@@ -861,10 +1152,18 @@ function App() {
                     setCategoryFilter(event.target.value)
                   }
                 >
-                  <option value="All">All Categories</option>
-                  <option value="Sanitation">Sanitation</option>
-                  <option value="Electricity">Electricity</option>
-                  <option value="Water Supply">Water Supply</option>
+                  <option value="All">
+                    All Categories
+                  </option>
+                  <option value="Sanitation">
+                    Sanitation
+                  </option>
+                  <option value="Electricity">
+                    Electricity
+                  </option>
+                  <option value="Water Supply">
+                    Water Supply
+                  </option>
                   <option value="Roads & Transport">
                     Roads & Transport
                   </option>
@@ -879,8 +1178,10 @@ function App() {
 
                 <div>
                   <h2>Manage Grievances</h2>
+
                   <p>
-                    {filteredGrievances.length} of {total} grievances shown.
+                    {filteredGrievances.length} of{" "}
+                    {total} grievances shown.
                   </p>
                 </div>
               </div>
@@ -888,23 +1189,33 @@ function App() {
               {filteredGrievances.length === 0 ? (
                 <div className="empty-state">
                   <span>🔎</span>
-                  <p>No grievances match your filters.</p>
+                  <p>
+                    No grievances match your
+                    filters.
+                  </p>
                 </div>
               ) : (
                 <div className="grievance-list">
                   {filteredGrievances.map((item) => (
-                    <div className="grievance-card" key={item.id}>
+                    <div
+                      className="grievance-card"
+                      key={item.id}
+                    >
                       <div className="grievance-top">
                         <div>
                           <span className="grievance-id">
                             GRIEVANCE #{item.id}
                           </span>
 
-                          <h3>{item.description}</h3>
+                          <h3>
+                            {item.description}
+                          </h3>
                         </div>
 
                         <span
-                          className={getStatusClass(item.status)}
+                          className={getStatusClass(
+                            item.status
+                          )}
                         >
                           {item.status}
                         </span>
@@ -918,17 +1229,23 @@ function App() {
 
                         <div>
                           <span>Location</span>
-                          <strong>{item.location}</strong>
+                          <strong>
+                            {item.location}
+                          </strong>
                         </div>
 
                         <div>
                           <span>Category</span>
-                          <strong>{item.category}</strong>
+                          <strong>
+                            {item.category}
+                          </strong>
                         </div>
 
                         <div>
                           <span>Department</span>
-                          <strong>{item.department}</strong>
+                          <strong>
+                            {item.department}
+                          </strong>
                         </div>
 
                         <div>
@@ -955,11 +1272,17 @@ function App() {
                             )
                           }
                         >
-                          <option value="Pending">Pending</option>
+                          <option value="Pending">
+                            Pending
+                          </option>
+
                           <option value="In Progress">
                             In Progress
                           </option>
-                          <option value="Resolved">Resolved</option>
+
+                          <option value="Resolved">
+                            Resolved
+                          </option>
                         </select>
 
                         <button
@@ -983,7 +1306,9 @@ function App() {
 
       <footer>
         <strong>CitySet</strong>
-        <span>Building better cities, one grievance at a time.</span>
+        <span>
+          Building better cities, one grievance at a time.
+        </span>
       </footer>
     </div>
   );

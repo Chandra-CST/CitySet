@@ -1,11 +1,14 @@
 package CitySet_Backend;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.OneToMany;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 
@@ -26,6 +29,9 @@ public class Grievance {
     private String status;
 
     private LocalDateTime createdAt;
+
+    @OneToMany(mappedBy = "grievance", cascade = CascadeType.ALL)
+    private List<GrievanceMedia> media;
 
     @PrePersist
     protected void onCreate() {
@@ -98,5 +104,13 @@ public class Grievance {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public List<GrievanceMedia> getMedia() {
+        return media;
+    }
+
+    public void setMedia(List<GrievanceMedia> media) {
+        this.media = media;
     }
 }

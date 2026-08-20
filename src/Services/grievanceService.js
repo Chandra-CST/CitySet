@@ -26,6 +26,45 @@ export async function createGrievance(grievance) {
   return response.json();
 }
 
+export async function uploadGrievanceMedia(id, files) {
+  if (!files || files.length === 0) {
+    return [];
+  }
+
+  const formData = new FormData();
+
+  Array.from(files).forEach((file) => {
+    formData.append("files", file);
+  });
+
+  const response = await fetch(
+    `${API_URL}/${id}/media`,
+    {
+      method: "POST",
+      body: formData,
+    }
+  );
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Failed to upload media.");
+  }
+
+  return response.json();
+}
+
+export async function getGrievanceMedia(id) {
+  const response = await fetch(
+    `${API_URL}/${id}/media`
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to load grievance media.");
+  }
+
+  return response.json();
+}
+
 export async function updateGrievanceStatus(id, status) {
   const response = await fetch(
     `${API_URL}/${id}/status?status=${encodeURIComponent(status)}`,
